@@ -1,0 +1,143 @@
+# CrowdfundChain Polygon Edge Blockchain Network
+# 4-node IBFT consensus network for VPS deployment
+
+services:
+  # ============================================
+  # POLYGON EDGE NODES (4 IBFT Validators)
+  # ============================================
+  
+  polygon-edge-node1:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node1
+    restart: unless-stopped
+    user: root
+    command:
+      - server
+      - --data-dir=/data/node1
+      - --chain=/genesis/genesis.json
+      - --grpc-address=0.0.0.0:9632
+      - --libp2p=0.0.0.0:1478
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    ports:
+      - "8545:8545"   # JSON-RPC (exposed for MetaMask/external access)
+      - "9632:9632"   # gRPC
+      - "1478:1478"   # libp2p
+    volumes:
+      - ./polygon-edge/node-1:/data/node1
+      - ./polygon-edge/genesis.json:/genesis/genesis.json:ro
+    networks:
+      blockchain_net:
+        ipv4_address: 172.20.0.10
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  polygon-edge-node2:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node2
+    restart: unless-stopped
+    user: root
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    command:
+      - server
+      - --data-dir=/data/node2
+      - --chain=/genesis/genesis.json
+      - --grpc-address=0.0.0.0:9632
+      - --libp2p=0.0.0.0:1478
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - ./polygon-edge/node-2:/data/node2
+      - ./polygon-edge/genesis.json:/genesis/genesis.json:ro
+    networks:
+      blockchain_net:
+        ipv4_address: 172.20.0.11
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  polygon-edge-node3:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node3
+    restart: unless-stopped
+    user: root
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    command:
+      - server
+      - --data-dir=/data/node3
+      - --chain=/genesis/genesis.json
+      - --grpc-address=0.0.0.0:9632
+      - --libp2p=0.0.0.0:1478
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - ./polygon-edge/node-3:/data/node3
+      - ./polygon-edge/genesis.json:/genesis/genesis.json:ro
+    networks:
+      blockchain_net:
+        ipv4_address: 172.20.0.12
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+  polygon-edge-node4:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node4
+    restart: unless-stopped
+    user: root
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    command:
+      - server
+      - --data-dir=/data/node4
+      - --chain=/genesis/genesis.json
+      - --grpc-address=0.0.0.0:9632
+      - --libp2p=0.0.0.0:1478
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - ./polygon-edge/node-4:/data/node4
+      - ./polygon-edge/genesis.json:/genesis/genesis.json:ro
+    networks:
+      blockchain_net:
+        ipv4_address: 172.20.0.13
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:8545"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+
+networks:
+  blockchain_net:
+    name: crowdfundchain_blockchain
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: 172.20.0.0/16
+
+volumes:
+  polygon_node1_data:
+    name: crowdfundchain_node1_data
+  polygon_node2_data:
+    name: crowdfundchain_node2_data
+  polygon_node3_data:
+    name: crowdfundchain_node3_data
+  polygon_node4_data:
+    name: crowdfundchain_node4_data

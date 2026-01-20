@@ -1,0 +1,352 @@
+################################################################################
+# CrowdfundChain VPS Deployment - Complete Infrastructure Stack
+#
+# Services:
+#   - PostgreSQL: Django database
+#   - Redis: Celery task queue & caching
+#   - Keycloak: SSO/KYC authentication
+#   - Django: Main application (optional - can run directly on VPS)
+#   - Celery Worker: Background tasks
+#   - Nginx: Reverse proxy
+#
+# Network: Connects to existing Polygon Edge network (172.18.0.0/16)
+################################################################################
+
+services:
+  #############################################################################
+  # PostgreSQL Database
+  #############################################################################
+  postgres:
+    image: postgres:15-alpine
+    container_name: crowdfundchain_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crowdfundchain_db}
+      POSTGRES_USER: ${POSTGRES_USER:-dltadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CrowdfundChain2025!}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5433}:5432"
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dltadmin} -d ${POSTGRES_DB:-crowdfundchain_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Redis for Celery & Caching
+  #############################################################################
+  redis:
+    image: redis:7-alpine
+    container_name: crowdfundchain_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-CrowdfundRedis2025!}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6380}:6379"
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-CrowdfundRedis2025!}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Keycloak Database (Separate from app database)
+  #############################################################################
+  postgres_keycloak:
+    image: postgres:15-alpine
+    container_name: crowdfundchain_postgres_keycloak
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-KeycloakDB2025!}
+    volumes:
+      - postgres_keycloak_data:/var/lib/postgresql/data
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Keycloak SSO/Authentication Server
+  #############################################################################
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: crowdfundchain_keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      # Database
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres_keycloak
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-KeycloakDB2025!}
+      
+      # Admin credentials
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-Admin2025!}
+      
+      # Server configuration
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_PROXY: edge
+      
+      # Logging
+      KC_LOG_LEVEL: INFO
+      
+      # Features
+      KC_FEATURES: token-exchange,admin-fine-grained-authz
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    depends_on:
+      postgres_keycloak:
+        condition: service_healthy
+    networks:
+      - crowdfund_network
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 90s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Django Application (Optional - can run directly on VPS)
+  #############################################################################
+  django:
+    build:
+      context: ./django-issuer-platform
+      dockerfile: Dockerfile.django
+    container_name: crowdfundchain_django
+    restart: unless-stopped
+    command: gunicorn issuer_platform.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+    environment:
+      # Django settings
+      DJANGO_SETTINGS_MODULE: issuer_platform.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: ${DEBUG:-False}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-196.188.63.167,localhost,127.0.0.1}
+      
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dltadmin}:${POSTGRES_PASSWORD:-CrowdfundChain2025!}@postgres:5432/${POSTGRES_DB:-crowdfundchain_db}
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      
+      # Blockchain
+      BLOCKCHAIN_RPC_URL: ${BLOCKCHAIN_RPC_URL:-http://172.18.0.5:8545}
+      CHAIN_ID: ${CHAIN_ID:-100}
+      
+      # Keycloak
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-crowdfundchain}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-issuer-platform}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+    ports:
+      - "${DJANGO_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      # Keycloak is optional - Django can start without it
+      # keycloak:
+      #   condition: service_healthy
+    volumes:
+      - django_static:/app/static
+      - django_media:/app/media
+      - django_logs:/app/logs
+    networks:
+      - crowdfund_network
+      - polygon_edge_network  # Connect to Polygon Edge network
+    profiles: ["full"]  # Only start with --profile full
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Celery Worker for Background Tasks
+  #############################################################################
+  celery_worker:
+    build:
+      context: ./django-issuer-platform
+      dockerfile: Dockerfile.django
+    container_name: crowdfundchain_celery_worker
+    restart: unless-stopped
+    command: celery -A issuer_platform worker -l info --concurrency=4
+    environment:
+      # Django settings
+      DJANGO_SETTINGS_MODULE: issuer_platform.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dltadmin}:${POSTGRES_PASSWORD:-CrowdfundChain2025!}@postgres:5432/${POSTGRES_DB:-crowdfundchain_db}
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      
+      # Blockchain
+      BLOCKCHAIN_RPC_URL: ${BLOCKCHAIN_RPC_URL:-http://172.18.0.5:8545}
+      CHAIN_ID: ${CHAIN_ID:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    volumes:
+      - celery_logs:/app/logs
+    networks:
+      - crowdfund_network
+      - polygon_edge_network  # Connect to Polygon Edge network
+    profiles: ["full"]  # Only start with --profile full
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Celery Beat for Scheduled Tasks
+  #############################################################################
+  celery_beat:
+    build:
+      context: ./django-issuer-platform
+      dockerfile: Dockerfile.django
+    container_name: crowdfundchain_celery_beat
+    restart: unless-stopped
+    command: celery -A issuer_platform beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      # Django settings
+      DJANGO_SETTINGS_MODULE: issuer_platform.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dltadmin}:${POSTGRES_PASSWORD:-CrowdfundChain2025!}@postgres:5432/${POSTGRES_DB:-crowdfundchain_db}
+      
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - crowdfund_network
+    profiles: ["full"]  # Only start with --profile full
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #############################################################################
+  # Nginx Reverse Proxy (Optional)
+  #############################################################################
+  nginx:
+    image: nginx:alpine
+    container_name: crowdfundchain_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - django_static:/var/www/static:ro
+      - nginx_logs:/var/log/nginx
+      - /var/www/crowdfundchain/frontend:/var/www/crowdfundchain/frontend:ro
+    depends_on:
+      - django
+    networks:
+      - crowdfund_network
+    profiles: ["full"]  # Only start with --profile full
+    healthcheck:
+      test: ["CMD", "wget", "-q", "--spider", "http://localhost/nginx-health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+################################################################################
+# Persistent Volumes (using standard Docker volumes)
+################################################################################
+volumes:
+  postgres_data:
+  postgres_keycloak_data:
+  redis_data:
+  keycloak_data:
+  django_static:
+  django_media:
+  django_logs:
+  celery_logs:
+  nginx_logs:
+
+################################################################################
+# Networks
+################################################################################
+networks:
+  # Internal network for CrowdfundChain services
+  crowdfund_network:
+    external: true
+    name: crowdfunding_crowdfund_network
+  
+  # Polygon Edge network - connects to existing network
+  polygon_edge_network:
+    external: true
+    name: crowdfunding_polygon_network

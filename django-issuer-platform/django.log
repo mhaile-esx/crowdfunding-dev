@@ -1,0 +1,14 @@
+nohup: ignoring input
+INFO 2026-01-06 18:37:13,343 autoreload Watching for file changes with StatReloader
+WARNING 2026-01-06 18:38:45,030 log Not Found: /
+WARNING 2026-01-06 18:38:45,030 basehttp "GET / HTTP/1.1" 404 3139
+WARNING 2026-01-06 18:42:27,244 log Not Found: /
+WARNING 2026-01-06 18:42:27,244 basehttp "GET / HTTP/1.0" 404 3139
+Performing system checks...
+
+System check identified no issues (0 silenced).
+January 06, 2026 - 18:37:24
+Django version 4.2.8, using settings 'issuer_platform.settings'
+Starting development server at http://0.0.0.0:8000/
+Quit the server with CONTROL-C.
+

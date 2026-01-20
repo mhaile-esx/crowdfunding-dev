@@ -1,0 +1,161 @@
+################################################################################
+# CrowdfundChain - DATABASE SERVICES ONLY
+#
+# Use this when Polygon Edge blockchain is ALREADY running on VPS
+#
+# Services:
+#   - PostgreSQL (Django Database)
+#   - Redis (Celery Task Queue)
+#   - Keycloak (SSO Authentication)
+#
+# Usage:
+#   docker compose -f docker-compose.databases.yml up -d
+################################################################################
+
+services:
+  ##############################################################################
+  #                     DATABASE SERVICES
+  ##############################################################################
+
+  postgres:
+    image: postgres:15-alpine
+    container_name: crowdfundchain_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crowdfundchain_db}
+      POSTGRES_USER: ${POSTGRES_USER:-dltadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CrowdfundChain2025}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dltadmin} -d ${POSTGRES_DB:-crowdfundchain_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  redis:
+    image: redis:7-alpine
+    container_name: crowdfundchain_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-CrowdfundRedis2025}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-CrowdfundRedis2025}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  postgres_keycloak:
+    image: postgres:15-alpine
+    container_name: crowdfundchain_postgres_keycloak
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-KeycloakDB2025}
+    volumes:
+      - postgres_keycloak_data:/var/lib/postgresql/data
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: crowdfundchain_keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres_keycloak
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-KeycloakDB2025}
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-Admin2025}
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_PROXY: edge
+      KC_LOG_LEVEL: INFO
+      KC_FEATURES: token-exchange,admin-fine-grained-authz
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    depends_on:
+      postgres_keycloak:
+        condition: service_healthy
+    networks:
+      - crowdfund_network
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+################################################################################
+#                     PERSISTENT VOLUMES
+################################################################################
+volumes:
+  postgres_data:
+    driver: local
+  postgres_keycloak_data:
+    driver: local
+  redis_data:
+    driver: local
+  keycloak_data:
+    driver: local
+
+################################################################################
+#                     NETWORKS
+################################################################################
+networks:
+  crowdfund_network:
+    driver: bridge
+    ipam:
+      config:
+        - subnet: 172.19.0.0/16

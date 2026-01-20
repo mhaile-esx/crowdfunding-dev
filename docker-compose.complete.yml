@@ -1,0 +1,586 @@
+### #############################################################################
+# CrowdfundChain - COMPLETE INFRASTRUCTURE
+#
+# This file includes EVERYTHING:
+#   1. Polygon Edge 4-Node IBFT Validator Network (Blockchain)
+#   2. PostgreSQL (Django Database)
+#   3. Redis (Celery Task Queue)
+#   4. Keycloak (SSO/KYC Authentication)
+#   5. Django Application (Optional)
+#   6. Celery Workers (Optional)
+#
+# Usage:
+#   # Start infrastructure only (blockchain + database services)
+#   docker-compose -f docker-compose.complete.yml up -d
+#
+#   # Start everything including Django
+#   docker-compose -f docker-compose.complete.yml --profile full up -d
+#
+#   # View status
+#   docker-compose -f docker-compose.complete.yml ps
+################################################################################
+
+services:
+  ##############################################################################
+  #                     POLYGON EDGE BLOCKCHAIN NETWORK
+  ##############################################################################
+
+  #-----------------------------------------------------------------------------
+  # Genesis Node Initializer (runs once to setup shared data)
+  #-----------------------------------------------------------------------------
+  polygon-edge-init:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-init
+    volumes:
+      - polygon_genesis:/data/genesis
+      - ./polygon-edge/config:/config:ro
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        if [ ! -f /data/genesis/genesis.json ]; then
+          echo "Initializing Polygon Edge genesis..."
+          polygon-edge genesis \
+            --consensus ibft \
+            --ibft-validators-prefix-path /config/validators \
+            --bootnode /dns4/polygon-edge-node1/tcp/1478/p2p/$(cat /config/validators/validator1/node-id.txt) \
+            --premine ${GENESIS_PREMINE_ADDRESS:-0x49065C1C0cFc356313eB67860bD6b697a9317a83}:1000000000000000000000 \
+            --chain-id ${CHAIN_ID:-100} \
+            --block-gas-limit 10000000
+          cp genesis.json /data/genesis/
+          echo "Genesis initialized!"
+        else
+          echo "Genesis already exists, skipping..."
+        fi
+    networks:
+      - polygon_network
+
+  #-----------------------------------------------------------------------------
+  # Polygon Edge Node 1 (Primary Validator)
+  #-----------------------------------------------------------------------------
+  polygon-edge-node1:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node1
+    restart: unless-stopped
+    depends_on:
+      polygon-edge-init:
+        condition: service_completed_successfully
+    command:
+      - server
+      - --data-dir=/data/node1
+      - --chain=/data/genesis/genesis.json
+      - --libp2p=0.0.0.0:1478
+      - --nat=172.18.0.5
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - polygon_node1_data:/data/node1
+      - polygon_genesis:/data/genesis:ro
+      - ./polygon-edge/config/validators/validator1:/data/node1/consensus:ro
+    ports:
+      - "8545:8545"   # JSON-RPC
+      - "1478:1478"   # libp2p
+    networks:
+      polygon_network:
+        ipv4_address: 172.18.0.5
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://localhost:8545 --post-data='{\"jsonrpc\":\"2.0\",\"method\":\"eth_blockNumber\",\"params\":[],\"id\":1}' --header='Content-Type: application/json' || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  #-----------------------------------------------------------------------------
+  # Polygon Edge Node 2 (Validator)
+  #-----------------------------------------------------------------------------
+  polygon-edge-node2:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node2
+    restart: unless-stopped
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    command:
+      - server
+      - --data-dir=/data/node2
+      - --chain=/data/genesis/genesis.json
+      - --libp2p=0.0.0.0:1478
+      - --nat=172.18.0.3
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - polygon_node2_data:/data/node2
+      - polygon_genesis:/data/genesis:ro
+      - ./polygon-edge/config/validators/validator2:/data/node2/consensus:ro
+    ports:
+      - "8546:8545"   # JSON-RPC (different port)
+    networks:
+      polygon_network:
+        ipv4_address: 172.18.0.3
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  #-----------------------------------------------------------------------------
+  # Polygon Edge Node 3 (Validator)
+  #-----------------------------------------------------------------------------
+  polygon-edge-node3:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node3
+    restart: unless-stopped
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    command:
+      - server
+      - --data-dir=/data/node3
+      - --chain=/data/genesis/genesis.json
+      - --libp2p=0.0.0.0:1478
+      - --nat=172.18.0.2
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - polygon_node3_data:/data/node3
+      - polygon_genesis:/data/genesis:ro
+      - ./polygon-edge/config/validators/validator3:/data/node3/consensus:ro
+    ports:
+      - "8547:8545"   # JSON-RPC (different port)
+    networks:
+      polygon_network:
+        ipv4_address: 172.18.0.2
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  #-----------------------------------------------------------------------------
+  # Polygon Edge Node 4 (Validator)
+  #-----------------------------------------------------------------------------
+  polygon-edge-node4:
+    image: 0xpolygon/polygon-edge:1.3.1
+    container_name: polygon-edge-node4
+    restart: unless-stopped
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    command:
+      - server
+      - --data-dir=/data/node4
+      - --chain=/data/genesis/genesis.json
+      - --libp2p=0.0.0.0:1478
+      - --nat=172.18.0.4
+      - --jsonrpc=0.0.0.0:8545
+      - --seal
+      - --log-level=INFO
+    volumes:
+      - polygon_node4_data:/data/node4
+      - polygon_genesis:/data/genesis:ro
+      - ./polygon-edge/config/validators/validator4:/data/node4/consensus:ro
+    ports:
+      - "8548:8545"   # JSON-RPC (different port)
+    networks:
+      polygon_network:
+        ipv4_address: 172.18.0.4
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "50m"
+        max-file: "5"
+
+  ##############################################################################
+  #                     APPLICATION INFRASTRUCTURE
+  ##############################################################################
+
+  #-----------------------------------------------------------------------------
+  # PostgreSQL Database
+  #-----------------------------------------------------------------------------
+  postgres:
+    image: postgres:15-alpine
+    container_name: crowdfundchain_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-crowdfundchain_db}
+      POSTGRES_USER: ${POSTGRES_USER:-dltadmin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-CrowdfundChain2025!}
+      POSTGRES_INITDB_ARGS: "--encoding=UTF-8 --lc-collate=C --lc-ctype=C"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+      - ./database/init.sql:/docker-entrypoint-initdb.d/init.sql:ro
+    ports:
+      - "${POSTGRES_PORT:-5432}:5432"
+    networks:
+      - crowdfund_network
+      - polygon_network  # Can access blockchain nodes
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-dltadmin} -d ${POSTGRES_DB:-crowdfundchain_db}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #-----------------------------------------------------------------------------
+  # Redis for Celery & Caching
+  #-----------------------------------------------------------------------------
+  redis:
+    image: redis:7-alpine
+    container_name: crowdfundchain_redis
+    restart: unless-stopped
+    command: >
+      redis-server
+      --appendonly yes
+      --appendfsync everysec
+      --maxmemory 512mb
+      --maxmemory-policy allkeys-lru
+      --requirepass ${REDIS_PASSWORD:-CrowdfundRedis2025!}
+    volumes:
+      - redis_data:/data
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD", "redis-cli", "-a", "${REDIS_PASSWORD:-CrowdfundRedis2025!}", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #-----------------------------------------------------------------------------
+  # Keycloak Database
+  #-----------------------------------------------------------------------------
+  postgres_keycloak:
+    image: postgres:15-alpine
+    container_name: crowdfundchain_postgres_keycloak
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: keycloak
+      POSTGRES_USER: keycloak
+      POSTGRES_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-KeycloakDB2025!}
+    volumes:
+      - postgres_keycloak_data:/var/lib/postgresql/data
+    networks:
+      - crowdfund_network
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U keycloak -d keycloak"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #-----------------------------------------------------------------------------
+  # Keycloak SSO/Authentication Server
+  #-----------------------------------------------------------------------------
+  keycloak:
+    image: quay.io/keycloak/keycloak:23.0
+    container_name: crowdfundchain_keycloak
+    restart: unless-stopped
+    command: start-dev
+    environment:
+      # Database
+      KC_DB: postgres
+      KC_DB_URL_HOST: postgres_keycloak
+      KC_DB_URL_DATABASE: keycloak
+      KC_DB_USERNAME: keycloak
+      KC_DB_PASSWORD: ${KEYCLOAK_DB_PASSWORD:-KeycloakDB2025!}
+      # Admin credentials
+      KEYCLOAK_ADMIN: ${KEYCLOAK_ADMIN:-admin}
+      KEYCLOAK_ADMIN_PASSWORD: ${KEYCLOAK_ADMIN_PASSWORD:-Admin2025!}
+      # Server configuration
+      KC_HTTP_ENABLED: "true"
+      KC_HOSTNAME_STRICT: "false"
+      KC_HOSTNAME_STRICT_HTTPS: "false"
+      KC_PROXY: edge
+      KC_LOG_LEVEL: INFO
+      KC_FEATURES: token-exchange,admin-fine-grained-authz
+    ports:
+      - "${KEYCLOAK_PORT:-8080}:8080"
+    depends_on:
+      postgres_keycloak:
+        condition: service_healthy
+    networks:
+      - crowdfund_network
+    volumes:
+      - keycloak_data:/opt/keycloak/data
+    healthcheck:
+      test: ["CMD-SHELL", "exec 3<>/dev/tcp/127.0.0.1/8080 || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ##############################################################################
+  #                     APPLICATION SERVICES (Optional)
+  ##############################################################################
+
+  #-----------------------------------------------------------------------------
+  # Django Application
+  #-----------------------------------------------------------------------------
+  django:
+    build:
+      context: ./django-issuer-platform
+      dockerfile: Dockerfile.django
+    container_name: crowdfundchain_django
+    restart: unless-stopped
+    command: >
+      sh -c "
+        python manage.py migrate --noinput &&
+        python manage.py collectstatic --noinput &&
+        gunicorn issuer_platform.wsgi:application --bind 0.0.0.0:8000 --workers 4 --timeout 120
+      "
+    environment:
+      DJANGO_SETTINGS_MODULE: issuer_platform.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DEBUG: ${DEBUG:-False}
+      ALLOWED_HOSTS: ${ALLOWED_HOSTS:-localhost,127.0.0.1}
+      # Database
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dltadmin}:${POSTGRES_PASSWORD:-CrowdfundChain2025!}@postgres:5432/${POSTGRES_DB:-crowdfundchain_db}
+      # Redis
+      REDIS_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      # Blockchain (connects to node1)
+      BLOCKCHAIN_RPC_URL: http://polygon-edge-node1:8545
+      POLYGON_EDGE_RPC_URL: http://polygon-edge-node1:8545
+      CHAIN_ID: ${CHAIN_ID:-100}
+      # Keycloak
+      KEYCLOAK_URL: http://keycloak:8080
+      KEYCLOAK_REALM: ${KEYCLOAK_REALM:-crowdfundchain}
+      KEYCLOAK_CLIENT_ID: ${KEYCLOAK_CLIENT_ID:-issuer-platform}
+      KEYCLOAK_CLIENT_SECRET: ${KEYCLOAK_CLIENT_SECRET}
+      # Smart Contracts
+      CONTRACT_NFT_CERTIFICATE: ${CONTRACT_NFT_CERTIFICATE}
+      CONTRACT_DAO_GOVERNANCE: ${CONTRACT_DAO_GOVERNANCE}
+      CONTRACT_CAMPAIGN_FACTORY: ${CONTRACT_CAMPAIGN_FACTORY}
+      CONTRACT_CAMPAIGN_IMPLEMENTATION: ${CONTRACT_CAMPAIGN_IMPLEMENTATION}
+      BLOCKCHAIN_DEPLOYER_PRIVATE_KEY: ${BLOCKCHAIN_DEPLOYER_PRIVATE_KEY}
+      BLOCKCHAIN_DEPLOYER_ADDRESS: ${BLOCKCHAIN_DEPLOYER_ADDRESS}
+    ports:
+      - "${DJANGO_PORT:-8000}:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      polygon-edge-node1:
+        condition: service_healthy
+    volumes:
+      - django_static:/app/static
+      - django_media:/app/media
+      - django_logs:/app/logs
+    networks:
+      - crowdfund_network
+      - polygon_network  # Can access blockchain nodes
+    profiles: ["full"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #-----------------------------------------------------------------------------
+  # Celery Worker
+  #-----------------------------------------------------------------------------
+  celery_worker:
+    build:
+      context: ./django-issuer-platform
+      dockerfile: Dockerfile.django
+    container_name: crowdfundchain_celery_worker
+    restart: unless-stopped
+    command: celery -A issuer_platform worker -l info --concurrency=4
+    environment:
+      DJANGO_SETTINGS_MODULE: issuer_platform.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dltadmin}:${POSTGRES_PASSWORD:-CrowdfundChain2025!}@postgres:5432/${POSTGRES_DB:-crowdfundchain_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      BLOCKCHAIN_RPC_URL: http://polygon-edge-node1:8545
+      CHAIN_ID: ${CHAIN_ID:-100}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      polygon-edge-node1:
+        condition: service_healthy
+    volumes:
+      - celery_logs:/app/logs
+    networks:
+      - crowdfund_network
+      - polygon_network
+    profiles: ["full"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #-----------------------------------------------------------------------------
+  # Celery Beat (Scheduler)
+  #-----------------------------------------------------------------------------
+  celery_beat:
+    build:
+      context: ./django-issuer-platform
+      dockerfile: Dockerfile.django
+    container_name: crowdfundchain_celery_beat
+    restart: unless-stopped
+    command: celery -A issuer_platform beat -l info --scheduler django_celery_beat.schedulers:DatabaseScheduler
+    environment:
+      DJANGO_SETTINGS_MODULE: issuer_platform.settings
+      SECRET_KEY: ${DJANGO_SECRET_KEY}
+      DATABASE_URL: postgresql://${POSTGRES_USER:-dltadmin}:${POSTGRES_PASSWORD:-CrowdfundChain2025!}@postgres:5432/${POSTGRES_DB:-crowdfundchain_db}
+      REDIS_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_BROKER_URL: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+      CELERY_RESULT_BACKEND: redis://:${REDIS_PASSWORD:-CrowdfundRedis2025!}@redis:6379/0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - crowdfund_network
+    profiles: ["full"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  #-----------------------------------------------------------------------------
+  # Nginx Reverse Proxy
+  #-----------------------------------------------------------------------------
+  nginx:
+    image: nginx:alpine
+    container_name: crowdfundchain_nginx
+    restart: unless-stopped
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - ./docker/nginx/nginx.conf:/etc/nginx/nginx.conf:ro
+      - ./docker/nginx/ssl:/etc/nginx/ssl:ro
+      - django_static:/var/www/static:ro
+      - nginx_logs:/var/log/nginx
+    depends_on:
+      - django
+    networks:
+      - crowdfund_network
+    profiles: ["full"]
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+  ##############################################################################
+  #                     SMART CONTRACT DEPLOYER (One-time)
+  ##############################################################################
+  
+  contract-deployer:
+    image: node:18-alpine
+    container_name: crowdfundchain_deployer
+    working_dir: /app
+    volumes:
+      - ./smart-contracts:/app
+      - deployer_cache:/app/node_modules
+    environment:
+      BLOCKCHAIN_RPC_URL: http://polygon-edge-node1:8545
+      DEPLOYER_PRIVATE_KEY: ${BLOCKCHAIN_DEPLOYER_PRIVATE_KEY:-0x3d5a9e9ae238ea42815fd4e84be3005ed5d4d32eb3d5655f7a47539889f91e4b}
+    entrypoint: ["/bin/sh", "-c"]
+    command:
+      - |
+        echo "Installing dependencies..."
+        npm install
+        echo "Deploying contracts..."
+        npx hardhat run deploy.js --network localhost
+        echo "Deployment complete!"
+    depends_on:
+      polygon-edge-node1:
+        condition: service_healthy
+    networks:
+      - polygon_network
+    profiles: ["deploy"]  # Run with: docker-compose --profile deploy up contract-deployer
+
+################################################################################
+#                     PERSISTENT VOLUMES
+################################################################################
+volumes:
+  # Polygon Edge volumes
+  polygon_genesis:
+    driver: local
+  polygon_node1_data:
+    driver: local
+  polygon_node2_data:
+    driver: local
+  polygon_node3_data:
+    driver: local
+  polygon_node4_data:
+    driver: local
+  
+  # Application volumes
+  postgres_data:
+    driver: local
+  postgres_keycloak_data:
+    driver: local
+  redis_data:
+    driver: local
+  keycloak_data:
+    driver: local
+  
+  # Django volumes
+  django_static:
+    driver: local
+  django_media:
+    driver: local
+  django_logs:
+    driver: local
+  celery_logs:
+    driver: local
+  nginx_logs:
+    driver: local
+  deployer_cache:
+    driver: local
+
+################################################################################
+#                     NETWORKS
+################################################################################
+networks:
+  # Polygon Edge blockchain network - use existing if available
+  polygon_network:
+    name: crowdfunding_polygon_network
+    driver: bridge
+  
+  # Application network - use existing if available
+  crowdfund_network:
+    name: crowdfunding_crowdfund_network
+    driver: bridge

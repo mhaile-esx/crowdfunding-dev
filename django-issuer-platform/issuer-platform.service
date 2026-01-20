@@ -1,0 +1,21 @@
+[Unit]
+Description=Django Issuer Platform - Gunicorn Daemon
+After=network.target postgresql.service redis.service
+
+[Service]
+Type=notify
+User=dltadmin
+Group=dltadmin
+WorkingDirectory=/home/dltadmin/django-issuer-platform
+Environment="PATH=/home/dltadmin/django-issuer-platform/venv/bin"
+EnvironmentFile=/home/dltadmin/django-issuer-platform/.env
+ExecStart=/home/dltadmin/django-issuer-platform/venv/bin/gunicorn \
+    --config /home/dltadmin/django-issuer-platform/gunicorn_config.py \
+    issuer_platform.wsgi:application
+ExecReload=/bin/kill -s HUP $MAINPID
+KillMode=mixed
+TimeoutStopSec=5
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target

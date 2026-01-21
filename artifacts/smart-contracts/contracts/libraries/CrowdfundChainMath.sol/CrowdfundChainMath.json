@@ -1,0 +1,10 @@
+{
+  "_format": "hh-sol-artifact-1",
+  "contractName": "CrowdfundChainMath",
+  "sourceName": "smart-contracts/contracts/libraries/CrowdfundChainMath.sol",
+  "abi": [],
+  "bytecode": "0x60808060405234601757603a9081601d823930815050f35b600080fdfe600080fdfea26469706673582212208e5ab579c248663b44fc9d08634efab5b7e06544133899b4143fcb8317a2d84a64736f6c63430008140033",
+  "deployedBytecode": "0x600080fdfea26469706673582212208e5ab579c248663b44fc9d08634efab5b7e06544133899b4143fcb8317a2d84a64736f6c63430008140033",
+  "linkReferences": {},
+  "deployedLinkReferences": {}
+}

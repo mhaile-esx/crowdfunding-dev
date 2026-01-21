@@ -1,0 +1,13 @@
+{
+  "network": "polygon-edge",
+  "chainId": 100,
+  "timestamp": "2026-01-21T01:07:58.941Z",
+  "deployer": "0x0050cd4A5398db7DE39b1C602fc80822F4027e06",
+  "contracts": {
+    "NFTShareCertificate": "0xa74fC6e2a8D1475a5126143653350E48d15A5eF9",
+    "DAOGovernance": "0x6b43a18aEae478f913cC889dCfC79E65CA6dd85A",
+    "DeFiYieldPool": "0x83A35BF44B92E84C68921e45B4Fb867CC3D674C3",
+    "FundEscrow": "0x25320348135dc1C71C35D213cAcbc169dd235956",
+    "CampaignFactory": "0x9C3065420f32a5D6630F15758866645B8541079d"
+  }
+}
